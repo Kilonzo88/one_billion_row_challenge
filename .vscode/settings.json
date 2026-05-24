@@ -1,0 +1,12 @@
+{
+    "files.watcherExclude": {
+        "**/measurements.txt": true,
+        "**/target/**": true
+    },
+    "files.exclude": {
+        "**/measurements.txt": true
+    },
+    "search.exclude": {
+        "**/measurements.txt": true
+    }
+}
