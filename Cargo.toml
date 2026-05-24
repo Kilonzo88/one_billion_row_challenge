@@ -3,11 +3,12 @@ name = "one_billion_row_challenge"
 version = "0.1.0"
 edition = "2024"
 
-[profile.release]
-lto = "fat"
-panic = "abort"
-debug = true
-codegen-units = 1
+# This is for `02-compiler-optimizations`
+# [profile.release]
+# lto = "fat"
+# panic = "abort"
+# debug = true
+# codegen-units = 1
 
 [dependencies]
 rand = "0.8"
