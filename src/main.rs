@@ -1,5 +1,5 @@
 use std::{
-    collections::BTreeMap,
+    collections::HashMap,
     fs::File,
     io::{BufRead, BufReader},
 };
@@ -7,7 +7,7 @@ use std::{
 fn main() {
     let f = File::open("measurements.txt").unwrap();
     let f = BufReader::new(f);
-    let mut stats = BTreeMap::<String, (f64, f64, usize, f64)>::new();
+    let mut stats = HashMap::<String, (f64, f64, usize, f64)>::new();
     for line in f.lines() {
         let line = line.unwrap();
         let (station, temperature) = line.split_once(';').unwrap();
