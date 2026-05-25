@@ -51,6 +51,7 @@ dependencies = [
 name = "one_billion_row_challenge"
 version = "0.1.0"
 dependencies = [
+ "libc",
  "rand",
  "rand_distr",
 ]
