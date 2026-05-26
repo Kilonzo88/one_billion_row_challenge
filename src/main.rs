@@ -23,7 +23,7 @@ fn mmap(f: &File) -> &'static [u8] {
 fn main() {
     let f = File::open("measurements.txt").unwrap();
     let map = mmap(&f);
-    let mut stats = HashMap::<Vec<u8>, (f64, f64, usize, f64)>::new();
+    let mut stats = HashMap::<&[u8], (f64, f64, usize, f64)>::new();
 
     for line in map.split(|&c| c == b'\n') {
         if line.is_empty() {
@@ -38,9 +38,7 @@ fn main() {
         let entry = if let Some(entry) = stats.get_mut(station) {
             entry
         } else {
-            stats
-                .entry(station.to_vec())
-                .or_insert((f64::MAX, 0., 0, f64::MIN))
+            stats.entry(station).or_insert((f64::MAX, 0.0, 0, f64::MIN))
         };
         entry.0 = entry.0.min(temperature);
         entry.1 += temperature;
@@ -50,7 +48,7 @@ fn main() {
 
     let mut sorted: Vec<(String, (f64, f64, usize, f64))> = stats
         .into_iter()
-        .map(|(k, v)| (unsafe { String::from_utf8_unchecked(k) }, v))
+        .map(|(k, v)| (unsafe { std::str::from_utf8_unchecked(k).to_string() }, v))
         .collect();
     sorted.sort_unstable_by(|a, b| a.0.cmp(&b.0));
 
