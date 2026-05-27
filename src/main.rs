@@ -23,39 +23,55 @@ fn mmap(f: &File) -> &'static [u8] {
 fn main() {
     let f = File::open("measurements.txt").unwrap();
     let map = mmap(&f);
-    let mut stats = HashMap::<&[u8], (f64, f64, usize, f64)>::new();
+    let mut stats = HashMap::<Vec<u8>, (i16, i32, usize, i16)>::new();
 
     for line in map.split(|&c| c == b'\n') {
         if line.is_empty() {
             continue; // skip empty lines
         }
         let mut fields = line.rsplitn(2, |&c| c == b';');
-        let temperature = fields.next().unwrap();
-        let station = fields.next().unwrap();
-        let temperature: f64 = unsafe { std::str::from_utf8_unchecked(temperature) }
-            .parse()
-            .unwrap();
+        let (Some(temperature), Some(station)) = (fields.next(), fields.next()) else {
+            panic!("bad line: {}", unsafe{std::str::from_utf8_unchecked(line)})
+        };
+        
+        let mut temp:i16 = 0;
+        let mut mul = 1;
+        for &i in temperature.iter().rev() {
+            match i {
+                b'.' => continue,
+                b'-' => { temp = -temp; break; } 
+                _ => {
+                    temp += (i - b'0') as i16 * mul;
+                    mul *= 10;
+                }
+            }
+        }
+
         let entry = if let Some(entry) = stats.get_mut(station) {
             entry
         } else {
-            stats.entry(station).or_insert((f64::MAX, 0.0, 0, f64::MIN))
+            stats.entry(station.to_vec()).or_insert((i16::MAX,0, 0, i16::MIN))
         };
-        entry.0 = entry.0.min(temperature);
-        entry.1 += temperature;
+        entry.0 = entry.0.min(temp);
+        entry.1 += temp as i32;
         entry.2 += 1;
-        entry.3 = entry.3.max(temperature);
+        entry.3 = entry.3.max(temp);
     }
 
-    let mut sorted: Vec<(String, (f64, f64, usize, f64))> = stats
+    let mut sorted: Vec<(String, (i16, i32, usize, i16))> = stats
         .into_iter()
-        .map(|(k, v)| (unsafe { std::str::from_utf8_unchecked(k).to_string() }, v))
+        .map(|(k, v)| (unsafe { std::str::from_utf8_unchecked(&k).to_string() }, v))
         .collect();
     sorted.sort_unstable_by(|a, b| a.0.cmp(&b.0));
 
     print!("{{");
     let mut iter = sorted.into_iter().peekable();
     while let Some((station, (min, sum, count, max))) = iter.next() {
-        print!("{station}={min:.1}/{:.1}/{max:.1}", sum / (count as f64));
+        print!("{station}={:.1}/{:.1}/{:.1}", 
+            (min as f64) / 10.,
+            (sum as f64) / 10. / (count as f64),
+            (max as f64) / 10.,
+        );
         if iter.peek().is_some() {
             print!(", ");
         }
