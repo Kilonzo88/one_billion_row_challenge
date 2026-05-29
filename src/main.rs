@@ -20,37 +20,64 @@ fn mmap(f: &File) -> &'static [u8] {
     }
 }
 
+fn parse_temp(temperature: &[u8]) -> i16 {
+    let mut temp: i16 = 0;
+    let mut mul: i16 = 1;
+    for &i in temperature.iter().rev() {
+        match i {
+            b'.' => continue,
+            b'-' => { temp = -temp; break; }
+            _ => {
+                temp += (i - b'0') as i16 * mul;
+                mul *= 10;
+            }
+        }
+    }
+    temp
+}
+
 fn main() {
     let f = File::open("measurements.txt").unwrap();
     let map = mmap(&f);
     let mut stats = HashMap::<Vec<u8>, (i16, i32, usize, i16)>::new();
 
-    for line in map.split(|&c| c == b'\n') {
+    let mut at = 0;
+    loop {
+        let rest = &map[at..];
+        // Search fthrough rest.len() byrtes starting as rest.as_otr() for a newline byte using libc's SIMD-optimized search, and return a pointer to where it was found
+        let next_newline = unsafe {
+            libc::memchr(
+                rest.as_ptr() as *const libc::c_void, //returns a C pointer that's why it's unsafe
+                b'\n' as libc::c_int,
+                rest.len(),
+            )
+        }; //Scans for new lines faster because unlike the previous closure which called every byte, SIMD scans 32 byrtes simultaneously
+
+        //Slices each line using the pointer from memchr and creates a slice
+        let line = if next_newline.is_null() {
+            rest
+        } else {
+            let len = (next_newline as *const u8 as usize) - (rest.as_ptr() as usize);
+            &rest[..len]
+        };
+
+        at += line.len() + 1; // adds one because the first character of the newline is ignored since that marks the end of the pointer
+
         if line.is_empty() {
-            continue; // skip empty lines
+            break;
         }
+
         let mut fields = line.rsplitn(2, |&c| c == b';');
         let (Some(temperature), Some(station)) = (fields.next(), fields.next()) else {
-            panic!("bad line: {}", unsafe{std::str::from_utf8_unchecked(line)})
+            panic!("bad line: {}", unsafe { std::str::from_utf8_unchecked(line) })
         };
-        
-        let mut temp:i16 = 0;
-        let mut mul = 1;
-        for &i in temperature.iter().rev() {
-            match i {
-                b'.' => continue,
-                b'-' => { temp = -temp; break; } 
-                _ => {
-                    temp += (i - b'0') as i16 * mul;
-                    mul *= 10;
-                }
-            }
-        }
+
+        let temp = parse_temp(temperature); // ← now a clean single call
 
         let entry = if let Some(entry) = stats.get_mut(station) {
             entry
         } else {
-            stats.entry(station.to_vec()).or_insert((i16::MAX,0, 0, i16::MIN))
+            stats.entry(station.to_vec()).or_insert((i16::MAX, 0, 0, i16::MIN))
         };
         entry.0 = entry.0.min(temp);
         entry.1 += temp as i32;
@@ -67,10 +94,11 @@ fn main() {
     print!("{{");
     let mut iter = sorted.into_iter().peekable();
     while let Some((station, (min, sum, count, max))) = iter.next() {
-        print!("{station}={:.1}/{:.1}/{:.1}", 
-            (min as f64) / 10.,
-            (sum as f64) / 10. / (count as f64),
-            (max as f64) / 10.,
+        print!(
+            "{station}={:.1}/{:.1}/{:.1}",
+            min as f64 / 10.0,
+            (sum as f64 / count as f64) / 10.0,
+            max as f64 / 10.0,
         );
         if iter.peek().is_some() {
             print!(", ");
