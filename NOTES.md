@@ -1,0 +1,1 @@
+** Just because SIMD is faster doesn't mean it's better. Tried scannig for the semi-colon bytes in parallelbut seems like most most of the lines aren't longer than 64 bytres as such using SIMD here isn't much of a use and infact it introduces FFI calling overhead
