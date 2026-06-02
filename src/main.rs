@@ -1,6 +1,10 @@
+#![feature(portable_simd)]  // Must be at the top of the file (crate level)
+
 use std::collections::HashMap;
 use std::fs::File;
 use std::os::unix::io::AsRawFd;
+use std::simd::{cmp::SimdPartialEq, u8x64};
+
 
 fn mmap(f: &File) -> &'static [u8] {
     let len = f.metadata().unwrap().len(); //Asks the OS "how big is this file?" — gets back 13 billion something bytes. We need this because mmap needs to know how much virtual address space to reserve
@@ -44,14 +48,14 @@ fn main() {
     let mut at = 0;
     loop {
         let rest = &map[at..];
-        // Search fthrough rest.len() byrtes starting as rest.as_otr() for a newline byte using libc's SIMD-optimized search, and return a pointer to where it was found
+        // Search through rest.len() bytes starting at rest.as_ptr() for a newline byte using libc's SIMD-optimized search, and return a pointer to where it was found
         let next_newline = unsafe {
             libc::memchr(
                 rest.as_ptr() as *const libc::c_void, //returns a C pointer that's why it's unsafe
                 b'\n' as libc::c_int,
                 rest.len(),
             )
-        }; //Scans for new lines faster because unlike the previous closure which called every byte, SIMD scans 32 byrtes simultaneously
+        }; //Scans for new lines faster because unlike the previous closure which called every byte, SIMD scans 32 bytes simultaneously
 
         //Slices each line using the pointer from memchr and creates a slice
         let line = if next_newline.is_null() {
@@ -67,12 +71,16 @@ fn main() {
             break;
         }
 
-        let mut fields = line.rsplitn(2, |&c| c == b';');
-        let (Some(temperature), Some(station)) = (fields.next(), fields.next()) else {
-            panic!("bad line: {}", unsafe { std::str::from_utf8_unchecked(line) })
-        };
+        // Use libc::memchr for semicolon — same SIMD approach as newline scanning
+        // Temperature is always 3-5 bytes — semicolon is always within 6 bytes from right
+        let semi_pos = line.len() - 1 - line.iter().rev().take(6)
+            .position(|&b| b == b';')
+            .unwrap();
+            
+        let station = &line[..semi_pos];
+        let temperature = &line[semi_pos + 1..];
 
-        let temp = parse_temp(temperature); // ← now a clean single call
+        let temp = parse_temp(temperature);
 
         let entry = if let Some(entry) = stats.get_mut(station) {
             entry
@@ -87,12 +95,12 @@ fn main() {
 
     let mut sorted: Vec<(String, (i16, i32, usize, i16))> = stats
         .into_iter()
-        .map(|(k, v)| (unsafe { std::str::from_utf8_unchecked(&k).to_string() }, v))
+        .map(|(k, v)| (unsafe { std::st`````````````````````````````````````````````````````r::from_utf8_unchecked(&k).to_string() }, v))
         .collect();
     sorted.sort_unstable_by(|a, b| a.0.cmp(&b.0));
 
     print!("{{");
-    let mut iter = sorted.into_iter().peekable();
+    let mut iter = sorted.into_iter().peekable(); //Perfomance bottlenecks
     while let Some((station, (min, sum, count, max))) = iter.next() {
         print!(
             "{station}={:.1}/{:.1}/{:.1}",
