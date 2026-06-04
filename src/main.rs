@@ -4,7 +4,32 @@ use std::collections::HashMap;
 use std::fs::File;
 use std::os::unix::io::AsRawFd;
 use std::simd::{cmp::SimdPartialEq, u8x64};
+use std::hash::{BuildHasherDefault, Hasher};
 
+#[derive(Default)]
+struct StationHasher(u64);
+
+impl Hasher for StationHasher {
+    #[inline(always)]
+    fn finish(&self) -> u64 {
+        self.0
+    }
+
+    #[inline(always)]
+    fn write(&mut self, bytes: &[u8]) {
+        // Process 8 bytes at a time
+        let mut hash = self.0;
+        for chunk in bytes.chunks(8) {
+            let mut val = 0u64; //0×0000000000000000
+            for &b in chunk {
+                val = (val << 8) | b as u64;
+            }
+            hash ^= val.wrapping_mul(0x9e3779b97f4a7c15);
+            hash = hash.rotate_left(31);
+        }
+        self.0 = hash;
+    }
+}
 
 fn mmap(f: &File) -> &'static [u8] {
     let len = f.metadata().unwrap().len(); //Asks the OS "how big is this file?" — gets back 13 billion something bytes. We need this because mmap needs to know how much virtual address space to reserve
@@ -43,7 +68,7 @@ fn parse_temp(temperature: &[u8]) -> i16 {
 fn main() {
     let f = File::open("measurements.txt").unwrap();
     let map = mmap(&f);
-    let mut stats = HashMap::<Vec<u8>, (i16, i32, usize, i16)>::with_capacity(10_000);
+    let mut stats = HashMap::<Vec<u8>, (i16, i32, usize, i16), BuildHasherDefault<StationHasher>>::with_capacity_and_hasher(10_000, BuildHasherDefault::default());
 
     let mut at = 0;
     while at < map.len() {
