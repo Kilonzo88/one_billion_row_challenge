@@ -43,10 +43,10 @@ fn parse_temp(temperature: &[u8]) -> i16 {
 fn main() {
     let f = File::open("measurements.txt").unwrap();
     let map = mmap(&f);
-    let mut stats = HashMap::<Vec<u8>, (i16, i32, usize, i16)>::new();
+    let mut stats = HashMap::<Vec<u8>, (i16, i32, usize, i16)>::with_capacity(10_000);
 
     let mut at = 0;
-    loop {
+    while at < map.len() {
         let rest = &map[at..];
         // Search through rest.len() bytes starting at rest.as_ptr() for a newline byte using libc's SIMD-optimized search, and return a pointer to where it was found
         let next_newline = unsafe {
@@ -58,14 +58,14 @@ fn main() {
         }; //Scans for new lines faster because unlike the previous closure which called every byte, SIMD scans 32 bytes simultaneously
 
         //Slices each line using the pointer from memchr and creates a slice
-        let line = if next_newline.is_null() {
-            rest
+        let (line, found_newline) = if next_newline.is_null() {
+            (rest, false)
         } else {
             let len = (next_newline as *const u8 as usize) - (rest.as_ptr() as usize);
-            &rest[..len]
+            (&rest[..len], true)
         };
 
-        at += line.len() + 1; // adds one because the first character of the newline is ignored since that marks the end of the pointer
+        at += line.len() + if found_newline { 1 } else { 0 }; // only add one if newline was found
 
         if line.is_empty() {
             break;
@@ -95,7 +95,7 @@ fn main() {
 
     let mut sorted: Vec<(String, (i16, i32, usize, i16))> = stats
         .into_iter()
-        .map(|(k, v)| (unsafe { std::st`````````````````````````````````````````````````````r::from_utf8_unchecked(&k).to_string() }, v))
+        .map(|(k, v)| (unsafe { std::str::from_utf8_unchecked(&k).to_string() }, v))
         .collect();
     sorted.sort_unstable_by(|a, b| a.0.cmp(&b.0));
 
@@ -106,7 +106,7 @@ fn main() {
             "{station}={:.1}/{:.1}/{:.1}",
             min as f64 / 10.0,
             (sum as f64 / count as f64) / 10.0,
-            max as f64 / 10.0,
+            max as f64 / 10.0, 
         );
         if iter.peek().is_some() {
             print!(", ");
