@@ -1,10 +1,10 @@
-#![feature(portable_simd)]  // Must be at the top of the file (crate level)
+#![feature(portable_simd)] // Must be at the top of the file (crate level)
 
 use std::collections::HashMap;
 use std::fs::File;
+use std::hash::{BuildHasherDefault, Hasher};
 use std::os::unix::io::AsRawFd;
 use std::simd::{cmp::SimdPartialEq, u8x64};
-use std::hash::{BuildHasherDefault, Hasher};
 
 #[derive(Default)]
 struct StationHasher(u64);
@@ -17,11 +17,19 @@ impl Hasher for StationHasher {
 
     #[inline(always)]
     fn write(&mut self, bytes: &[u8]) {
-        // Process 8 bytes at a time
         let mut hash = self.0;
-        for chunk in bytes.chunks(8) {
-            let mut val = 0u64; //0×0000000000000000
-            for &b in chunk {
+        let mut i = 0;
+        while i + 8 <= bytes.len() {
+            //This new while loop is just one CPU per iteration
+            let val = u64::from_ne_bytes(bytes[i..i + 8].try_into().unwrap()); //Reads all 8 bytes at once as a single memory load into a u64 CPU register. Because we already check the bounds of each slice in the 'while' statement, doing the unsafe'unwrap_unchecked doesn't yield a perfomance gain because the compiler automatically skips checking' 
+            hash ^= val.wrapping_mul(0x9e3779b97f4a7c15);
+            hash = hash.rotate_left(31);
+            i += 8;
+        }
+        // handle remaining bytes
+        if i < bytes.len() {
+            let mut val = 0u64;
+            for &b in &bytes[i..] {
                 val = (val << 8) | b as u64;
             }
             hash ^= val.wrapping_mul(0x9e3779b97f4a7c15);
@@ -55,11 +63,14 @@ fn parse_temp(temperature: &[u8]) -> i16 {
     for &i in temperature.iter().rev() {
         match i {
             b'.' => continue,
-            b'-' => { temp = -temp; break; }
+            b'-' => {
+                temp = -temp;
+                break;
+            }
             _ => {
                 temp += (i - b'0') as i16 * mul;
                 mul *= 10;
-            }
+            } //TODO: Introduce branchless parsing
         }
     }
     temp
@@ -98,10 +109,8 @@ fn main() {
 
         // Use libc::memchr for semicolon — same SIMD approach as newline scanning
         // Temperature is always 3-5 bytes — semicolon is always within 6 bytes from right
-        let semi_pos = line.len() - 1 - line.iter().rev().take(6)
-            .position(|&b| b == b';')
-            .unwrap();
-            
+        let semi_pos = line.len() - 1 - line.iter().rev().take(6).position(|&b| b == b';').unwrap();
+
         let station = &line[..semi_pos];
         let temperature = &line[semi_pos + 1..];
 
@@ -110,7 +119,9 @@ fn main() {
         let entry = if let Some(entry) = stats.get_mut(station) {
             entry
         } else {
-            stats.entry(station.to_vec()).or_insert((i16::MAX, 0, 0, i16::MIN))
+            stats
+                .entry(station.to_vec())
+                .or_insert((i16::MAX, 0, 0, i16::MIN))
         };
         entry.0 = entry.0.min(temp);
         entry.1 += temp as i32;
@@ -131,7 +142,7 @@ fn main() {
             "{station}={:.1}/{:.1}/{:.1}",
             min as f64 / 10.0,
             (sum as f64 / count as f64) / 10.0,
-            max as f64 / 10.0, 
+            max as f64 / 10.0,
         );
         if iter.peek().is_some() {
             print!(", ");
