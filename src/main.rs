@@ -6,6 +6,49 @@ use std::hash::{BuildHasherDefault, Hasher};
 use std::os::unix::io::AsRawFd;
 use std::simd::{cmp::SimdPartialEq, u8x64};
 
+use std::borrow::Borrow;
+
+#[derive(Clone, Debug)]
+struct StationKey {
+    len: usize,
+    bytes: [u8; 100], // stations are <= to 100 bytes in length and it's better for them to be in an array for cache optimization
+}
+
+impl PartialEq for StationKey {
+    #[inline(always)]
+    fn eq(&self, other: &Self) -> bool {
+        self.len == other.len && &self.bytes[..self.len] == &other.bytes[..other.len] //compares only valid prefix and removes the trailing '0'
+    }
+}
+
+impl Eq for StationKey {}
+
+impl std::hash::Hash for StationKey {
+    #[inline(always)]
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.bytes[..self.len].hash(state);
+    }
+}
+
+impl StationKey {
+    #[inline(always)]
+    fn new(slice: &[u8]) -> Self {
+        let mut bytes = [0u8; 100];
+        bytes[..slice.len()].copy_from_slice(slice);
+        Self {
+            len: slice.len(),
+            bytes,
+        }
+    }
+}
+
+impl Borrow<[u8]> for StationKey {
+    #[inline(always)]
+    fn borrow(&self) -> &[u8] {
+        &self.bytes[..self.len]
+    }
+}
+
 #[derive(Default)]
 struct StationHasher(u64);
 
@@ -79,7 +122,7 @@ fn parse_temp(temperature: &[u8]) -> i16 {
 fn main() {
     let f = File::open("measurements.txt").unwrap();
     let map = mmap(&f);
-    let mut stats = HashMap::<Vec<u8>, (i16, i32, usize, i16), BuildHasherDefault<StationHasher>>::with_capacity_and_hasher(10_000, BuildHasherDefault::default());
+    let mut stats = HashMap::<StationKey, (i16, i32, usize, i16), BuildHasherDefault<StationHasher>>::with_capacity_and_hasher(10_000, BuildHasherDefault::default());
 
     let mut at = 0;
     while at < map.len() {
@@ -120,7 +163,7 @@ fn main() {
             entry
         } else {
             stats
-                .entry(station.to_vec())
+                .entry(StationKey::new(station))
                 .or_insert((i16::MAX, 0, 0, i16::MIN))
         };
         entry.0 = entry.0.min(temp);
@@ -131,7 +174,12 @@ fn main() {
 
     let mut sorted: Vec<(String, (i16, i32, usize, i16))> = stats
         .into_iter()
-        .map(|(k, v)| (unsafe { std::str::from_utf8_unchecked(&k).to_string() }, v))
+        .map(|(k, v)| {
+            (
+                unsafe { std::str::from_utf8_unchecked(&k.bytes[..k.len]).to_string() },
+                v,
+            )
+        })
         .collect();
     sorted.sort_unstable_by(|a, b| a.0.cmp(&b.0));
 
