@@ -17,7 +17,8 @@ struct StationKey {
 impl PartialEq for StationKey {
     #[inline(always)]
     fn eq(&self, other: &Self) -> bool {
-        self.len == other.len && &self.bytes[..self.len] == &other.bytes[..other.len] //compares only valid prefix and removes the trailing '0'
+        self.len == other.len && &self.bytes[..self.len] == &other.bytes[..other.len]
+        //compares only valid prefix and removes the trailing '0'
     }
 }
 
@@ -64,7 +65,7 @@ impl Hasher for StationHasher {
         let mut i = 0;
         while i + 8 <= bytes.len() {
             //This new while loop is just one CPU per iteration
-            let val = u64::from_ne_bytes(bytes[i..i + 8].try_into().unwrap()); //Reads all 8 bytes at once as a single memory load into a u64 CPU register. Because we already check the bounds of each slice in the 'while' statement, doing the unsafe'unwrap_unchecked doesn't yield a perfomance gain because the compiler automatically skips checking' 
+            let val = u64::from_ne_bytes(bytes[i..i + 8].try_into().unwrap()); //Reads all 8 bytes at once as a single memory load into a u64 CPU register. Because we already check the bounds of each slice in the 'while' statement, doing the unsafe'unwrap_unchecked doesn't yield a perfomance gain because the compiler automatically skips checking'
             hash ^= val.wrapping_mul(0x9e3779b97f4a7c15);
             hash = hash.rotate_left(31);
             i += 8;
@@ -82,6 +83,7 @@ impl Hasher for StationHasher {
     }
 }
 
+#[inline(always)]
 fn mmap(f: &File) -> &'static [u8] {
     let len = f.metadata().unwrap().len(); //Asks the OS "how big is this file?" — gets back 13 billion something bytes. We need this because mmap needs to know how much virtual address space to reserve
     unsafe {
