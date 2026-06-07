@@ -101,7 +101,7 @@ fn mmap(f: &File) -> &'static [u8] {
         std::slice::from_raw_parts(ptr as *const u8, len as usize)
     }
 }
-
+#[inline(always)]
 fn parse_temp(temperature: &[u8]) -> i16 {
     let mut temp: i16 = 0;
     let mut mul: i16 = 1;
