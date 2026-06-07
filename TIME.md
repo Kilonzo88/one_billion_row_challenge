@@ -1,3 +1,2 @@
-  Time (mean ± σ):     32.983 s ±  0.234 s    [User: 32.089 s, System: 0.759 s]
-  Range (min … max):   32.779 s … 33.238 s    3 runs
- 
+  Time (mean ± σ):     32.382 s ±  0.063 s    [User: 31.491 s, System: 0.759 s]
+  Range (min … max):   32.316 s … 32.441 s 
