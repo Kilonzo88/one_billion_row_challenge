@@ -102,25 +102,25 @@ fn mmap(f: &File) -> &'static [u8] {
     }
 }
 #[inline(always)]
-fn parse_temp(mut bytes: &[u8]) -> i16 {
-    if let Some(&b'\r') = bytes.last() {
-        bytes = &bytes[..bytes.len() - 1];
-    }
-    match bytes {
-        [b'-', a, b'.', c] => -(((*a - b'0') as i16) * 10 + (*c - b'0') as i16),
+fn parse_temp(temperature: &[u8]) -> i16 {
+    let len = temperature.len();
+    let b0 = temperature[len - 1] - b'0';
+    let b1 = temperature[len - 3] - b'0';
 
-        [b'-', a, b, b'.', c] => {
-            -(((*a - b'0') as i16) * 100 + ((*b - b'0') as i16) * 10 + (*c - b'0') as i16)
+    let mut temp = b0 as i16 + (b1 as i16) * 10;
+
+    if len > 3 {
+        let b2 = temperature[len - 4];
+        if b2 == b'-' {
+            temp = -temp;
+        } else {
+            temp += (b2 - b'0') as i16 * 100;
+            if len == 5 {
+                temp = -temp;
+            }
         }
-
-        [a, b'.', c] => ((*a - b'0') as i16) * 10 + (*c - b'0') as i16,
-
-        [a, b, b'.', c] => {
-            ((*a - b'0') as i16) * 100 + ((*b - b'0') as i16) * 10 + (*c - b'0') as i16
-        }
-
-        _ => unreachable!(),
     }
+    temp
 }
 
 fn main() {
