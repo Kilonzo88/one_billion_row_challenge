@@ -101,26 +101,61 @@ fn mmap(f: &File) -> &'static [u8] {
         std::slice::from_raw_parts(ptr as *const u8, len as usize)
     }
 }
+
+/// Parses the temperature and locates the semicolon from the **end** of a raw line.
+///
+/// The 1BRC temperature format is always one of these four patterns,
+/// with exactly one decimal digit (i.e. one digit after the dot):
+///
+/// ```
+/// Pattern      Example      Indices from end (len = line length)
+/// -------      -------      ------------------------------------
+///  X.X         5.3          [len-1]='3'  [len-2]='.'  [len-3]='5'  [len-4]=';'
+/// -X.X        -5.3          [len-1]='3'  [len-2]='.'  [len-3]='5'  [len-4]='-'  [len-5]=';'
+///  XX.X        53.2         [len-1]='2'  [len-2]='.'  [len-3]='3'  [len-4]='5'  [len-5]=';'
+/// -XX.X       -53.2         [len-1]='2'  [len-2]='.'  [len-3]='3'  [len-4]='5'  [len-5]='-'  [len-6]=';'
+/// ```
+///
+/// Returns `(temp, semi_pos)` where `temp` is the temperature scaled by 10
+/// (e.g. `53` represents `5.3°C`) and `semi_pos` is the byte index of `';'`.
 #[inline(always)]
-fn parse_temp(temperature: &[u8]) -> i16 {
-    let len = temperature.len();
-    let b0 = temperature[len - 1] - b'0';
-    let b1 = temperature[len - 3] - b'0';
+fn parse_temp_and_semi(line: &[u8]) -> (i16, usize) {
+    let n = line.len();
 
-    let mut temp = b0 as i16 + (b1 as i16) * 10;
+    // b0: always the tenths digit  (last byte,        e.g. '3' in "5.3")
+    // b1: always the ones digit    (skip '.' at n-2,  e.g. '5' in "5.3")
+    // [n-2] is always '.', so we never read it.
+    let b0 = line[n - 1] - b'0'; // tenths
+    let b1 = line[n - 3] - b'0'; // ones
+    let mut temp = b0 as i16 + b1 as i16 * 10;
 
-    if len > 3 {
-        let b2 = temperature[len - 4];
-        if b2 == b'-' {
-            temp = -temp;
+    // b2 is the character one position before the ones digit.
+    // Its value tells us which of the four patterns we are in:
+    let b2 = line[n - 4];
+
+    let semi_pos = if b2 == b';' {
+        // Pattern "X.X"  — single positive digit, semicolon is right here.
+        n - 4
+    } else if b2 == b'-' {
+        // Pattern "-X.X" — single negative digit, negate and step back one more.
+        temp = -temp;
+        n - 5
+    } else {
+        // b2 is a digit → two-digit temperature ("XX.X" or "-XX.X").
+        // Incorporate the tens-of-real-value digit (×100 in scaled units).
+        temp += (b2 - b'0') as i16 * 100;
+
+        if line[n - 5] == b';' {
+            // Pattern "XX.X"  — two-digit positive, semicolon here.
+            n - 5
         } else {
-            temp += (b2 - b'0') as i16 * 100;
-            if len == 5 {
-                temp = -temp;
-            }
+            // Pattern "-XX.X" — two-digit negative, negate and step back one more.
+            temp = -temp;
+            n - 6
         }
-    }
-    temp
+    };
+
+    (temp, semi_pos)
 }
 
 fn main() {
@@ -154,14 +189,9 @@ fn main() {
             break;
         }
 
-        // Use libc::memchr for semicolon — same SIMD approach as newline scanning
-        // Temperature is always 3-5 bytes — semicolon is always within 6 bytes from right
-        let semi_pos = line.len() - 1 - line.iter().rev().take(6).position(|&b| b == b';').unwrap();
+        let (temp, semi_pos) = parse_temp_and_semi(line);
 
         let station = &line[..semi_pos];
-        let temperature = &line[semi_pos + 1..];
-
-        let temp = parse_temp(temperature);
 
         let entry = if let Some(entry) = stats.get_mut(station) {
             entry
