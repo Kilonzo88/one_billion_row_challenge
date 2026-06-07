@@ -102,23 +102,25 @@ fn mmap(f: &File) -> &'static [u8] {
     }
 }
 #[inline(always)]
-fn parse_temp(temperature: &[u8]) -> i16 {
-    let mut temp: i16 = 0;
-    let mut mul: i16 = 1;
-    for &i in temperature.iter().rev() {
-        match i {
-            b'.' => continue,
-            b'-' => {
-                temp = -temp;
-                break;
-            }
-            _ => {
-                temp += (i - b'0') as i16 * mul;
-                mul *= 10;
-            } //TODO: Introduce branchless parsing
-        }
+fn parse_temp(mut bytes: &[u8]) -> i16 {
+    if let Some(&b'\r') = bytes.last() {
+        bytes = &bytes[..bytes.len() - 1];
     }
-    temp
+    match bytes {
+        [b'-', a, b'.', c] => -(((*a - b'0') as i16) * 10 + (*c - b'0') as i16),
+
+        [b'-', a, b, b'.', c] => {
+            -(((*a - b'0') as i16) * 100 + ((*b - b'0') as i16) * 10 + (*c - b'0') as i16)
+        }
+
+        [a, b'.', c] => ((*a - b'0') as i16) * 10 + (*c - b'0') as i16,
+
+        [a, b, b'.', c] => {
+            ((*a - b'0') as i16) * 100 + ((*b - b'0') as i16) * 10 + (*c - b'0') as i16
+        }
+
+        _ => unreachable!(),
+    }
 }
 
 fn main() {
@@ -192,7 +194,7 @@ fn main() {
             "{station}={:.1}/{:.1}/{:.1}",
             min as f64 / 10.0,
             (sum as f64 / count as f64) / 10.0,
-            max as f64 / 10.0,
+            (max as f64 / 10.0),
         );
         if iter.peek().is_some() {
             print!(", ");
