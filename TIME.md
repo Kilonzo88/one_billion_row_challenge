@@ -1,3 +1,5 @@
-Benchmark 3: /tmp/brc-03
-  Time (mean ± σ):     97.787 s ±  1.591 s    [User: 94.787 s, System: 2.636 s]
-  Range (min … max):   96.1
+Benchmark 1: target/release/one_billion_row_challenge (3 runs)
+                mean     ±       σ          min     …     max
+  Wall Time      2.2 min ±     0.1 min      2.1 min …     2.3 min
+  Memory         3.4 MiB ±     0.0 MiB      3.4 MiB …     3.4 MiB
+ 
