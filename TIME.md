@@ -1,3 +1,5 @@
-Benchmark 1: /tmp/brc-01
-  Time (mean ± σ):     55.428 s ±  0.256 s    [User: 54.431 s, System: 0.792 s]
-  Range (min … max):   55.141 s … 55.632 s    3 runs
+Benchmark 1: target/x86_64-unknown-linux-gnu/release/one_billion_row_challenge (3 runs)
+                mean     ±       σ          min     …     max
+  Wall Time   38.705 s   ±   0.534 s     38.190 s   …  39.256 s
+  Memory        12.9 GiB ±     0.0 GiB     12.9 GiB …    12.9 GiB
+ 
