@@ -1,2 +1,5 @@
-Time (mean ± σ):     70.356 s ±  1.278 s    [User: 69.289 s, System: 0.820 s]
-  Range (min … max):   69.190 s … 71.723 s    3 runs
+Benchmark 1: target/x86_64-unknown-linux-gnu/release/one_billion_row_challenge (3 runs)
+                mean     ±       σ          min     …     max
+  Wall Time      1.1 min ±     0.0 min      1.1 min …     1.1 min
+  Memory         3.4 MiB ±     0.0 MiB      3.4 MiB …     3.4 MiB
+ 
