@@ -1,91 +1,36 @@
-#![feature(portable_simd)] // Must be at the top of the file (crate level)
-
-use std::collections::HashMap;
 use std::fs::File;
-use std::hash::{BuildHasherDefault, Hasher};
 use std::os::unix::io::AsRawFd;
-use std::simd::{cmp::SimdPartialEq, u8x64};
 
-use std::borrow::Borrow;
+const TABLE_BITS: u32 = 15; // 32768 slots (2 MB); the 1BRC limit is ~10k stations
+const TABLE_SIZE: usize = 1 << TABLE_BITS;
+const MASK: usize = TABLE_SIZE - 1;
 
-#[derive(Clone, Debug)]
-struct StationKey {
-    len: usize,
-    bytes: [u8; 100], // stations are <= to 100 bytes in length and it's better for them to be in an array for cache optimization
+/// One slot == one cache line. The first 16 bytes of the name live inline as two
+/// u64s (zero padded), so most lookups compare two integers and never leave the line.
+/// Names longer than 16 bytes compare their remainder against the first occurrence,
+/// which is still sitting in the mmap, so names up to 100 bytes need no extra storage.
+#[derive(Clone, Copy)]
+#[repr(C, align(64))]
+struct Slot {
+    k0: u64,
+    k1: u64,
+    name: &'static [u8], // full name, borrowed from the mmap
+    len: u32,            // 0 == empty slot
+    min: i16,
+    max: i16,
+    sum: i64,
+    count: u32,
 }
 
-impl PartialEq for StationKey {
-    #[inline(always)]
-    fn eq(&self, other: &Self) -> bool {
-        self.len == other.len && &self.bytes[..self.len] == &other.bytes[..other.len]
-        //compares only valid prefix and removes the trailing '0'
-    }
-}
-
-impl Eq for StationKey {}
-
-impl std::hash::Hash for StationKey {
-    #[inline(always)]
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.bytes[..self.len].hash(state);
-    }
-}
-
-impl StationKey {
-    #[inline(always)]
-    fn new(slice: &[u8]) -> Self {
-        let mut bytes = [0u8; 100];
-        bytes[..slice.len()].copy_from_slice(slice);
-        Self {
-            len: slice.len(),
-            bytes,
-        }
-    }
-}
-
-impl Borrow<[u8]> for StationKey {
-    #[inline(always)]
-    fn borrow(&self) -> &[u8] {
-        &self.bytes[..self.len]
-    }
-}
-
-#[derive(Default)]
-struct StationHasher(u64);
-
-impl Hasher for StationHasher {
-    #[inline(always)]
-    fn finish(&self) -> u64 {
-        self.0
-    }
-
-    #[inline(always)]
-    fn write(&mut self, bytes: &[u8]) {
-        let mut hash = self.0;
-        let mut i = 0;
-        while i + 8 <= bytes.len() {
-            //This new while loop is just one CPU per iteration
-            let val = u64::from_ne_bytes(bytes[i..i + 8].try_into().unwrap()); //Reads all 8 bytes at once as a single memory load into a u64 CPU register. Because we already check the bounds of each slice in the 'while' statement, doing the unsafe'unwrap_unchecked doesn't yield a perfomance gain because the compiler automatically skips checking'
-            hash ^= val.wrapping_mul(0x9e3779b97f4a7c15);
-            hash = hash.rotate_left(31);
-            i += 8;
-        }
-        // handle remaining bytes
-        if i < bytes.len() {
-            let mut val = 0u64;
-            for &b in &bytes[i..] {
-                val = (val << 8) | b as u64;
-            }
-            hash ^= val.wrapping_mul(0x9e3779b97f4a7c15);
-            hash = hash.rotate_left(31);
-        }
-        self.0 = hash;
+impl Slot {
+    fn empty() -> Self {
+        Slot { k0: 0, k1: 0, name: &[], len: 0, min: i16::MAX, max: i16::MIN, sum: 0, count: 0 }
     }
 }
 
 #[inline(always)]
 fn mmap(f: &File) -> &'static [u8] {
-    let len = f.metadata().unwrap().len(); //Asks the OS "how big is this file?" — gets back 13 billion something bytes. We need this because mmap needs to know how much virtual address space to reserve
+    let len = f.metadata().unwrap().len(); //Asks the OS "how big is this file?"
     unsafe {
         let ptr = libc::mmap(
             std::ptr::null_mut(), // let OS choose the virtual address
@@ -103,53 +48,28 @@ fn mmap(f: &File) -> &'static [u8] {
 }
 
 /// Parses the temperature and locates the semicolon from the **end** of a raw line.
-///
-/// The 1BRC temperature format is always one of these four patterns,
-/// with exactly one decimal digit (i.e. one digit after the dot):
-///
-/// ```
-/// Pattern      Example      Indices from end (len = line length)
-/// -------      -------      ------------------------------------
-///  X.X         5.3          [len-1]='3'  [len-2]='.'  [len-3]='5'  [len-4]=';'
-/// -X.X        -5.3          [len-1]='3'  [len-2]='.'  [len-3]='5'  [len-4]='-'  [len-5]=';'
-///  XX.X        53.2         [len-1]='2'  [len-2]='.'  [len-3]='3'  [len-4]='5'  [len-5]=';'
-/// -XX.X       -53.2         [len-1]='2'  [len-2]='.'  [len-3]='3'  [len-4]='5'  [len-5]='-'  [len-6]=';'
-/// ```
-///
-/// Returns `(temp, semi_pos)` where `temp` is the temperature scaled by 10
-/// (e.g. `53` represents `5.3°C`) and `semi_pos` is the byte index of `';'`.
+/// (unchanged from your version)
 #[inline(always)]
 fn parse_temp_and_semi(line: &[u8]) -> (i16, usize) {
     let n = line.len();
 
-    // b0: always the tenths digit  (last byte,        e.g. '3' in "5.3")
-    // b1: always the ones digit    (skip '.' at n-2,  e.g. '5' in "5.3")
-    // [n-2] is always '.', so we never read it.
     let b0 = line[n - 1] - b'0'; // tenths
     let b1 = line[n - 3] - b'0'; // ones
     let mut temp = b0 as i16 + b1 as i16 * 10;
 
-    // b2 is the character one position before the ones digit.
-    // Its value tells us which of the four patterns we are in:
     let b2 = line[n - 4];
 
     let semi_pos = if b2 == b';' {
-        // Pattern "X.X"  — single positive digit, semicolon is right here.
         n - 4
     } else if b2 == b'-' {
-        // Pattern "-X.X" — single negative digit, negate and step back one more.
         temp = -temp;
         n - 5
     } else {
-        // b2 is a digit → two-digit temperature ("XX.X" or "-XX.X").
-        // Incorporate the tens-of-real-value digit (×100 in scaled units).
         temp += (b2 - b'0') as i16 * 100;
 
         if line[n - 5] == b';' {
-            // Pattern "XX.X"  — two-digit positive, semicolon here.
             n - 5
         } else {
-            // Pattern "-XX.X" — two-digit negative, negate and step back one more.
             temp = -temp;
             n - 6
         }
@@ -158,24 +78,68 @@ fn parse_temp_and_semi(line: &[u8]) -> (i16, usize) {
     (temp, semi_pos)
 }
 
+/// First 16 bytes of the name as two little-endian u64s, zero padded past `len`.
+/// `can_read16` says whether 16 bytes starting at the name are inside the mapping.
+#[inline(always)]
+fn prefix(station: &[u8], can_read16: bool) -> (u64, u64) {
+    let len = station.len();
+    let v: u128 = if can_read16 {
+        unsafe { std::ptr::read_unaligned(station.as_ptr() as *const u128) }
+    } else {
+        // only the last few lines of the file end up here
+        let mut b = [0u8; 16];
+        let n = len.min(16);
+        b[..n].copy_from_slice(&station[..n]);
+        u128::from_le_bytes(b)
+    };
+    let v = if len < 16 { v & ((1u128 << (len * 8)) - 1) } else { v };
+    (v as u64, (v >> 64) as u64)
+}
+
+/// Returns the index of the slot for this station, inserting it if new.
+#[inline(always)]
+fn find(table: &mut [Slot], station: &'static [u8], can_read16: bool) -> usize {
+    let len = station.len();
+    let (k0, k1) = prefix(station, can_read16);
+
+    // one multiply; top bits are the best mixed
+    let mut idx = ((k0 ^ k1.rotate_left(32)).wrapping_mul(0x9e3779b97f4a7c15) >> (64 - TABLE_BITS)) as usize;
+
+    loop {
+        let s = unsafe { table.get_unchecked_mut(idx) };
+
+        if s.len as usize == len && s.k0 == k0 && s.k1 == k1 && (len <= 16 || s.name[16..] == station[16..]) {
+            return idx;
+        }
+        if s.len == 0 {
+            s.k0 = k0;
+            s.k1 = k1;
+            s.name = station;
+            s.len = len as u32;
+            return idx;
+        }
+        idx = (idx + 1) & MASK;
+    }
+}
+
 fn main() {
     let f = File::open("measurements.txt").unwrap();
     let map = mmap(&f);
-    let mut stats = HashMap::<StationKey, (i16, i32, usize, i16), BuildHasherDefault<StationHasher>>::with_capacity_and_hasher(10_000, BuildHasherDefault::default());
+    let mut table = vec![Slot::empty(); TABLE_SIZE];
 
     let mut at = 0;
     while at < map.len() {
+        let line_start = at;
         let rest = &map[at..];
-        // Search through rest.len() bytes starting at rest.as_ptr() for a newline byte using libc's SIMD-optimized search, and return a pointer to where it was found
+        // Search through rest.len() bytes starting at rest.as_ptr() for a newline byte
         let next_newline = unsafe {
             libc::memchr(
-                rest.as_ptr() as *const libc::c_void, //returns a C pointer that's why it's unsafe
+                rest.as_ptr() as *const libc::c_void,
                 b'\n' as libc::c_int,
                 rest.len(),
             )
-        }; //Scans for new lines faster because unlike the previous closure which called every byte, SIMD scans 32 bytes simultaneously
+        };
 
-        //Slices each line using the pointer from memchr and creates a slice
         let (line, found_newline) = if next_newline.is_null() {
             (rest, false)
         } else {
@@ -191,35 +155,35 @@ fn main() {
 
         let (temp, semi_pos) = parse_temp_and_semi(line);
 
-        let station = &line[..semi_pos];
+        let station: &'static [u8] = &line[..semi_pos];
+        let can_read16 = line_start + 16 <= map.len();
 
-        let entry = if let Some(entry) = stats.get_mut(station) {
-            entry
-        } else {
-            stats
-                .entry(StationKey::new(station))
-                .or_insert((i16::MAX, 0, 0, i16::MIN))
-        };
-        entry.0 = entry.0.min(temp);
-        entry.1 += temp as i32;
-        entry.2 += 1;
-        entry.3 = entry.3.max(temp);
+        let idx = find(&mut table, station, can_read16);
+        let s = unsafe { table.get_unchecked_mut(idx) };
+        s.min = s.min.min(temp);
+        s.max = s.max.max(temp);
+        s.sum += temp as i64;
+        s.count += 1;
     }
 
-    let mut sorted: Vec<(String, (i16, i32, usize, i16))> = stats
-        .into_iter()
-        .map(|(k, v)| {
+    let mut sorted: Vec<(String, i16, i64, u32, i16)> = table
+        .iter()
+        .filter(|s| s.len != 0)
+        .map(|s| {
             (
-                unsafe { std::str::from_utf8_unchecked(&k.bytes[..k.len]).to_string() },
-                v,
+                unsafe { std::str::from_utf8_unchecked(s.name).to_string() },
+                s.min,
+                s.sum,
+                s.count,
+                s.max,
             )
         })
         .collect();
     sorted.sort_unstable_by(|a, b| a.0.cmp(&b.0));
 
     print!("{{");
-    let mut iter = sorted.into_iter().peekable(); //Perfomance bottlenecks
-    while let Some((station, (min, sum, count, max))) = iter.next() {
+    let mut iter = sorted.into_iter().peekable();
+    while let Some((station, min, sum, count, max)) = iter.next() {
         print!(
             "{station}={:.1}/{:.1}/{:.1}",
             min as f64 / 10.0,
